@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #include "cJSON.h"
@@ -33,6 +34,7 @@ static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_device;
 static SemaphoreHandle_t s_lock;
 static bool s_ready;
+static bool s_clock_enabled = true;
 static uint8_t s_framebuffer[OLED_WIDTH * OLED_PAGES];
 
 static esp_err_t write_bytes(uint8_t control, const uint8_t *data, size_t length)
@@ -98,6 +100,37 @@ static void fb_set_pixel(int x, int y, bool on)
     } else {
         s_framebuffer[index] &= (uint8_t)~bit;
     }
+}
+
+static void fb_fill_rect(int x, int y, int width, int height, bool on)
+{
+    for (int py = y; py < y + height; ++py) {
+        for (int px = x; px < x + width; ++px) {
+            fb_set_pixel(px, py, on);
+        }
+    }
+}
+
+static void fb_draw_hline(int x, int y, int width, bool on)
+{
+    for (int px = x; px < x + width; ++px) {
+        fb_set_pixel(px, y, on);
+    }
+}
+
+static void fb_draw_vline(int x, int y, int height, bool on)
+{
+    for (int py = y; py < y + height; ++py) {
+        fb_set_pixel(x, py, on);
+    }
+}
+
+static void fb_draw_rect(int x, int y, int width, int height, bool on)
+{
+    fb_draw_hline(x, y, width, on);
+    fb_draw_hline(x, y + height - 1, width, on);
+    fb_draw_vline(x, y, height, on);
+    fb_draw_vline(x + width - 1, y, height, on);
 }
 
 static esp_err_t fb_flush(void)
@@ -258,11 +291,89 @@ static esp_err_t draw_clock_screen(void)
     return fb_flush();
 }
 
+static bool emotion_is(const char *emotion, const char *expected)
+{
+    return emotion && strcasecmp(emotion, expected) == 0;
+}
+
+static void fb_draw_eye_pair(int left_y, int right_y, int height)
+{
+    fb_fill_rect(25, left_y, 26, height, true);
+    fb_fill_rect(77, right_y, 26, height, true);
+}
+
+static void fb_draw_mouth_idle(void)
+{
+    fb_draw_hline(52, 50, 24, true);
+}
+
+static void fb_draw_mouth_happy(void)
+{
+    fb_set_pixel(48, 45, true);
+    fb_set_pixel(49, 46, true);
+    fb_set_pixel(50, 47, true);
+    fb_draw_hline(51, 48, 26, true);
+    fb_set_pixel(77, 47, true);
+    fb_set_pixel(78, 46, true);
+    fb_set_pixel(79, 45, true);
+}
+
+static void fb_draw_mouth_error(void)
+{
+    fb_draw_hline(48, 53, 32, true);
+    fb_draw_hline(49, 52, 30, true);
+}
+
+static esp_err_t draw_face_screen(const char *emotion, unsigned int frame)
+{
+    fb_clear();
+
+    if (emotion_is(emotion, "happy")) {
+        fb_draw_hline(25, 30, 26, true);
+        fb_draw_hline(77, 30, 26, true);
+        fb_set_pixel(24, 31, true);
+        fb_set_pixel(51, 31, true);
+        fb_set_pixel(76, 31, true);
+        fb_set_pixel(103, 31, true);
+        fb_draw_mouth_happy();
+    } else if (emotion_is(emotion, "thinking")) {
+        fb_draw_eye_pair(24, 20, 12);
+        fb_draw_text(92, 44, "...", 1);
+        fb_draw_hline(50, 51, 26, true);
+        if ((frame % 2U) == 0U) {
+            fb_draw_rect(18, 18, 38, 24, true);
+        }
+    } else if (emotion_is(emotion, "error")) {
+        for (int i = 0; i < 24; ++i) {
+            fb_set_pixel(25 + i, 20 + i, true);
+            fb_set_pixel(48 - i, 20 + i, true);
+            fb_set_pixel(79 + i, 20 + i, true);
+            fb_set_pixel(102 - i, 20 + i, true);
+        }
+        fb_draw_mouth_error();
+    } else if (emotion_is(emotion, "speaking")) {
+        fb_draw_eye_pair(20, 20, 18);
+        if ((frame % 2U) == 0U) {
+            fb_draw_rect(52, 48, 24, 8, true);
+        } else {
+            fb_fill_rect(52, 45, 24, 14, true);
+            fb_fill_rect(56, 49, 16, 6, false);
+        }
+    } else {
+        int blink = ((frame % 12U) == 0U) ? 4 : 18;
+        int eye_y = ((frame % 12U) == 0U) ? 27 : 20;
+        fb_draw_eye_pair(eye_y, eye_y, blink);
+        fb_draw_mouth_idle();
+    }
+
+    return fb_flush();
+}
+
 static void clock_task(void *arg)
 {
     (void)arg;
     while (true) {
-        if (s_ready && xSemaphoreTake(s_lock, pdMS_TO_TICKS(2000)) == pdTRUE) {
+        if (s_ready && s_clock_enabled && xSemaphoreTake(s_lock, pdMS_TO_TICKS(2000)) == pdTRUE) {
             esp_err_t err = draw_clock_screen();
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "clock refresh failed: %s", esp_err_to_name(err));
@@ -271,6 +382,41 @@ static void clock_task(void *arg)
         }
         vTaskDelay(pdMS_TO_TICKS(30000));
     }
+}
+
+esp_err_t tool_oled_set_clock_enabled(bool enabled)
+{
+    if (!s_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_clock_enabled = enabled;
+    return ESP_OK;
+}
+
+esp_err_t tool_oled_draw_clock(void)
+{
+    if (!s_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(2000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = draw_clock_screen();
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
+esp_err_t tool_oled_draw_face(const char *emotion, unsigned int frame)
+{
+    if (!s_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(2000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = draw_face_screen(emotion ? emotion : "idle", frame);
+    xSemaphoreGive(s_lock);
+    return err;
 }
 
 esp_err_t tool_oled_init(void)
