@@ -27,6 +27,7 @@
 #define OLED_HEIGHT 64
 #define OLED_PAGES (OLED_HEIGHT / 8)
 #define OLED_I2C_PORT I2C_NUM_1
+#define OLED_I2C_SPEED_HZ 100000
 
 static const char *TAG = "tool_oled";
 static i2c_master_bus_handle_t s_bus;
@@ -423,6 +424,20 @@ static esp_err_t attach_oled_device(void)
 {
     static const uint8_t candidates[] = {0x3C, 0x3D};
     esp_err_t last_err = ESP_ERR_NOT_FOUND;
+    bool found_any = false;
+
+    ESP_LOGI(TAG, "Scanning I2C bus for OLED devices on SCL GPIO%d / SDA GPIO%d",
+             BRN_PROFILE_OLED_I2C_SCL, BRN_PROFILE_OLED_I2C_SDA);
+    for (uint8_t address = 0x03; address < 0x78; ++address) {
+        esp_err_t err = i2c_master_probe(s_bus, address, 80);
+        if (err == ESP_OK) {
+            found_any = true;
+            ESP_LOGI(TAG, "I2C device detected at 0x%02X", address);
+        }
+    }
+    if (!found_any) {
+        ESP_LOGW(TAG, "No I2C devices detected. Check OLED VCC/GND/SCL/SDA wiring and selected GPIOs.");
+    }
 
     for (size_t i = 0; i < sizeof(candidates); ++i) {
         uint8_t address = candidates[i];
@@ -436,7 +451,7 @@ static esp_err_t attach_oled_device(void)
         i2c_device_config_t device_config = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = address,
-            .scl_speed_hz = 400000,
+            .scl_speed_hz = OLED_I2C_SPEED_HZ,
         };
         err = i2c_master_bus_add_device(s_bus, &device_config, &s_device);
         if (err == ESP_OK) {
