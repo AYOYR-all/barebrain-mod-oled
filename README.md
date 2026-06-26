@@ -7,7 +7,7 @@
 - `SCL`
 - `SDA`
 
-第一版按 SSD1306 兼容屏幕实现，I2C 地址固定为 `0x3C`。安装并启用插件后，在 BareBrain-Manager 的“引脚配置”页选择 `SCL` 和 `SDA` 两个 GPIO，云端构建生成的固件启动后会在 OLED 上显示 `READY`。
+第一版按 SSD1306 兼容屏幕实现，I2C 地址固定为 `0x3C`。安装并启用插件后，在 BareBrain-Manager 的“引脚配置”页选择 `SCL` 和 `SDA` 两个 GPIO，云端构建生成的固件启动后会在 OLED 上显示时间、日期和星期。
 
 ## Profile 配置
 
@@ -27,4 +27,3 @@
 - `barebrain.mod.json`
 - `CMakeLists.txt`
 - `src/`
-
