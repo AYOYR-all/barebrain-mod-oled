@@ -29,7 +29,7 @@ static esp_err_t tool_oled_mod_init(void)
 const brn_mod_t brn_mod_tool_oled = {
     .id = "tool-oled",
     .name = "OLED Tool",
-    .version = "0.1.3",
+    .version = "0.1.4",
     .deps = tool_oled_deps,
     .init = tool_oled_mod_init,
 };
