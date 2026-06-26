@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "id": "tool-oled",
+  "name": "OLED 显示屏",
+  "version": "0.1.0",
+  "type": "tool",
+  "description": "驱动 4 针 I2C OLED 屏幕，显示状态、回复摘要和调试信息。",
+  "targets": ["esp32s3"],
+  "barebrain_min": "0.1.0",
+  "barebrain_max": "0.x",
+  "sources": [
+    "src/mod_tool_oled.c",
+    "src/tool_oled.c"
+  ],
+  "headers": [
+    "src/tool_oled.h"
+  ],
+  "dependencies": [
+    "core.tool_registry"
+  ],
+  "conflicts": [],
+  "permissions": [
+    "gpio.write",
+    "i2c.write"
+  ],
+  "idf_components": ["esp_driver_i2c", "freertos"],
+  "tools": [
+    "oled_text"
+  ],
+  "services": [],
+  "resources": {
+    "tasks": 0,
+    "gpio": ["configurable"],
+    "i2c": ["configurable"],
+    "psram_bytes_hint": 4096,
+    "flash_bytes_hint": 32768
+  },
+  "config_schema": {
+    "oled.i2c_scl": {
+      "type": "gpio",
+      "label": "SCL",
+      "required": true
+    },
+    "oled.i2c_sda": {
+      "type": "gpio",
+      "label": "SDA",
+      "required": true
+    }
+  },
+  "hardware": {
+    "module": "SSD1306-compatible 4-pin I2C OLED",
+    "interface": "i2c",
+    "i2c_address": "0x3C",
+    "power": [
+      {"module_pin": "VCC", "board_pin": "3V3 or 5V, verify module"},
+      {"module_pin": "GND", "board_pin": "GND"}
+    ]
+  }
+}
