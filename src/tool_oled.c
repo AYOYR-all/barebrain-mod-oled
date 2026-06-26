@@ -228,20 +228,33 @@ static esp_err_t draw_clock_screen(void)
     struct tm timeinfo = {0};
     char time_text[6];
     char date_text[11];
+    int hour;
+    int minute;
+    int year;
+    int month;
+    int day;
+    int weekday;
     static const char *const weekdays[] = {
         "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"
     };
 
     time(&now);
     localtime_r(&now, &timeinfo);
-    snprintf(time_text, sizeof(time_text), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-    snprintf(date_text, sizeof(date_text), "%04d-%02d-%02d",
-             timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
+    hour = (timeinfo.tm_hour >= 0 && timeinfo.tm_hour <= 23) ? timeinfo.tm_hour : 0;
+    minute = (timeinfo.tm_min >= 0 && timeinfo.tm_min <= 59) ? timeinfo.tm_min : 0;
+    year = timeinfo.tm_year + 1900;
+    year = (year >= 1970 && year <= 9999) ? year : 1970;
+    month = (timeinfo.tm_mon >= 0 && timeinfo.tm_mon <= 11) ? timeinfo.tm_mon + 1 : 1;
+    day = (timeinfo.tm_mday >= 1 && timeinfo.tm_mday <= 31) ? timeinfo.tm_mday : 1;
+    weekday = (timeinfo.tm_wday >= 0 && timeinfo.tm_wday <= 6) ? timeinfo.tm_wday : 0;
+
+    snprintf(time_text, sizeof(time_text), "%02d:%02d", hour, minute);
+    snprintf(date_text, sizeof(date_text), "%04d-%02d-%02d", year, month, day);
 
     fb_clear();
     fb_draw_text(19, 4, time_text, 3);
     fb_draw_text(4, 42, date_text, 1);
-    fb_draw_text(86, 38, weekdays[timeinfo.tm_wday], 2);
+    fb_draw_text(86, 38, weekdays[weekday], 2);
     return fb_flush();
 }
 
