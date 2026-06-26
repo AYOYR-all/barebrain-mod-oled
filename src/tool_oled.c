@@ -26,12 +26,12 @@
 #define OLED_WIDTH 128
 #define OLED_HEIGHT 64
 #define OLED_PAGES (OLED_HEIGHT / 8)
-#define OLED_ADDRESS 0x3C
 #define OLED_I2C_PORT I2C_NUM_1
 
 static const char *TAG = "tool_oled";
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_device;
+static uint8_t s_address;
 static SemaphoreHandle_t s_lock;
 static bool s_ready;
 static bool s_clock_enabled = true;
@@ -419,6 +419,39 @@ esp_err_t tool_oled_draw_face(const char *emotion, unsigned int frame)
     return err;
 }
 
+static esp_err_t attach_oled_device(void)
+{
+    static const uint8_t candidates[] = {0x3C, 0x3D};
+    esp_err_t last_err = ESP_ERR_NOT_FOUND;
+
+    for (size_t i = 0; i < sizeof(candidates); ++i) {
+        uint8_t address = candidates[i];
+        esp_err_t err = i2c_master_probe(s_bus, address, 500);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "OLED not found at I2C address 0x%02X: %s", address, esp_err_to_name(err));
+            last_err = err;
+            continue;
+        }
+
+        i2c_device_config_t device_config = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = address,
+            .scl_speed_hz = 400000,
+        };
+        err = i2c_master_bus_add_device(s_bus, &device_config, &s_device);
+        if (err == ESP_OK) {
+            s_address = address;
+            ESP_LOGI(TAG, "OLED found at I2C address 0x%02X", address);
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "OLED address 0x%02X responded but attach failed: %s", address, esp_err_to_name(err));
+        last_err = err;
+    }
+
+    ESP_LOGE(TAG, "OLED was not found at 0x3C or 0x3D. Check VCC/GND/SCL/SDA and Manager GPIO config.");
+    return last_err;
+}
+
 esp_err_t tool_oled_init(void)
 {
     i2c_master_bus_config_t bus_config = {
@@ -430,14 +463,7 @@ esp_err_t tool_oled_init(void)
         .flags.enable_internal_pullup = true,
     };
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &s_bus), TAG, "initialize OLED I2C bus");
-
-    i2c_device_config_t device_config = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = OLED_ADDRESS,
-        .scl_speed_hz = 400000,
-    };
-    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_bus, &device_config, &s_device), TAG, "attach OLED");
-    ESP_RETURN_ON_ERROR(i2c_master_probe(s_bus, OLED_ADDRESS, 500), TAG, "OLED not found at 0x3C");
+    ESP_RETURN_ON_ERROR(attach_oled_device(), TAG, "attach OLED");
 
     static const uint8_t init_sequence[] = {
         0xAE, 0x20, 0x00, 0xB0, 0xC8, 0x00, 0x10, 0x40,
@@ -452,7 +478,7 @@ esp_err_t tool_oled_init(void)
         return ESP_ERR_NO_MEM;
     }
     s_ready = true;
-    ESP_LOGI(TAG, "SSD1306 OLED ready at I2C address 0x3C");
+    ESP_LOGI(TAG, "SSD1306 OLED ready at I2C address 0x%02X", s_address);
     ESP_RETURN_ON_ERROR(draw_clock_screen(), TAG, "draw clock screen");
     BaseType_t created = xTaskCreate(clock_task, "tool_oled_clock", 3072, NULL, 3, NULL);
     return created == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
