@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "cJSON.h"
 #include "driver/i2c_master.h"
@@ -32,6 +33,7 @@ static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_device;
 static SemaphoreHandle_t s_lock;
 static bool s_ready;
+static uint8_t s_framebuffer[OLED_WIDTH * OLED_PAGES];
 
 static esp_err_t write_bytes(uint8_t control, const uint8_t *data, size_t length)
 {
@@ -74,6 +76,37 @@ static esp_err_t clear_screen(void)
         err = set_cursor(page, 0);
         for (uint8_t column = 0; err == ESP_OK && column < OLED_WIDTH; column += sizeof(zeros)) {
             err = write_bytes(0x40, zeros, sizeof(zeros));
+        }
+    }
+    return err;
+}
+
+static void fb_clear(void)
+{
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
+}
+
+static void fb_set_pixel(int x, int y, bool on)
+{
+    if (x < 0 || x >= OLED_WIDTH || y < 0 || y >= OLED_HEIGHT) {
+        return;
+    }
+    uint16_t index = (uint16_t)(x + (y / 8) * OLED_WIDTH);
+    uint8_t bit = (uint8_t)(1U << (y % 8));
+    if (on) {
+        s_framebuffer[index] |= bit;
+    } else {
+        s_framebuffer[index] &= (uint8_t)~bit;
+    }
+}
+
+static esp_err_t fb_flush(void)
+{
+    esp_err_t err = ESP_OK;
+    for (uint8_t page = 0; err == ESP_OK && page < OLED_PAGES; ++page) {
+        err = set_cursor(page, 0);
+        for (uint8_t column = 0; err == ESP_OK && column < OLED_WIDTH; column += 16) {
+            err = write_bytes(0x40, &s_framebuffer[page * OLED_WIDTH + column], 16);
         }
     }
     return err;
@@ -130,6 +163,33 @@ static esp_err_t draw_char(char value)
     return write_bytes(0x40, packet, sizeof(packet));
 }
 
+static void fb_draw_char(int x, int y, char value, int scale)
+{
+    const uint8_t *bitmap = glyph(value);
+    for (int column = 0; column < 5; ++column) {
+        for (int row = 0; row < 8; ++row) {
+            if (!(bitmap[column] & (1U << row))) {
+                continue;
+            }
+            for (int dx = 0; dx < scale; ++dx) {
+                for (int dy = 0; dy < scale; ++dy) {
+                    fb_set_pixel(x + column * scale + dx, y + row * scale + dy, true);
+                }
+            }
+        }
+    }
+}
+
+static void fb_draw_text(int x, int y, const char *text, int scale)
+{
+    int cursor_x = x;
+    int step = 6 * scale;
+    for (const char *cursor = text; *cursor != '\0'; ++cursor) {
+        fb_draw_char(cursor_x, y, *cursor, scale);
+        cursor_x += step;
+    }
+}
+
 static esp_err_t draw_text(const char *text)
 {
     esp_err_t err = clear_screen();
@@ -160,6 +220,44 @@ static esp_err_t draw_text(const char *text)
         }
     }
     return err;
+}
+
+static esp_err_t draw_clock_screen(void)
+{
+    time_t now = 0;
+    struct tm timeinfo = {0};
+    char time_text[6];
+    char date_text[11];
+    static const char *const weekdays[] = {
+        "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"
+    };
+
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    snprintf(time_text, sizeof(time_text), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+    snprintf(date_text, sizeof(date_text), "%04d-%02d-%02d",
+             timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
+
+    fb_clear();
+    fb_draw_text(19, 4, time_text, 3);
+    fb_draw_text(4, 42, date_text, 1);
+    fb_draw_text(86, 38, weekdays[timeinfo.tm_wday], 2);
+    return fb_flush();
+}
+
+static void clock_task(void *arg)
+{
+    (void)arg;
+    while (true) {
+        if (s_ready && xSemaphoreTake(s_lock, pdMS_TO_TICKS(2000)) == pdTRUE) {
+            esp_err_t err = draw_clock_screen();
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "clock refresh failed: %s", esp_err_to_name(err));
+            }
+            xSemaphoreGive(s_lock);
+        }
+        vTaskDelay(pdMS_TO_TICKS(30000));
+    }
 }
 
 esp_err_t tool_oled_init(void)
@@ -196,7 +294,9 @@ esp_err_t tool_oled_init(void)
     }
     s_ready = true;
     ESP_LOGI(TAG, "SSD1306 OLED ready at I2C address 0x3C");
-    return draw_text("READY");
+    ESP_RETURN_ON_ERROR(draw_clock_screen(), TAG, "draw clock screen");
+    BaseType_t created = xTaskCreate(clock_task, "tool_oled_clock", 3072, NULL, 3, NULL);
+    return created == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 esp_err_t tool_oled_execute(const char *input_json, char *output, size_t output_size)
